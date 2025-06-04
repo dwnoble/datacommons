@@ -3,6 +3,7 @@ from typing import List, Optional
 import logging
 
 # Third-party imports
+from datacommons.db.repositories.edge_repository import EdgeRepository
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload, Session
 
@@ -294,8 +295,20 @@ class GraphService:
     
     # Add all nodes and edges to the session
     self.session.add_all(nodes)
-    self.session.add_all(edges)
+    # Flush the session to ensure all nodes are added
+    self.session.flush()
+    logger.info("Successfully added all nodes to database: " + str(nodes))
     
-    # Commit the transaction
+    # Add all edges to the session
+    edge_repository = EdgeRepository(self.session)
+    for edge in edges:
+      if edge.object_value is None:
+        self.session.add(edge)
+      else:
+        sql, params = edge_repository.build_create_edge_with_embedding_statement(edge)
+        self.session.execute(text(sql).bindparams(**params))
+    logger.info("Successfully added all edges to database: " + str(edges))
+    
     self.session.commit()
+    
     logger.info("Successfully committed all nodes and edges to database")
