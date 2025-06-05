@@ -1,7 +1,7 @@
 import click
 import uvicorn
 from .app import app
-from datacommons.db.session import initialize_db
+from datacommons.db.session import initialize_db, initialize_vertex_ai_embedding_model
 from .core.config import get_config
 from .core.logging import setup_logging, get_logger
 
@@ -26,6 +26,14 @@ def main(host: str, port: int, reload: bool):
       config.GCP_PROJECT_ID,
       config.GCP_SPANNER_INSTANCE_ID,
       config.GCP_SPANNER_DATABASE_NAME
+  )
+  logger.info("Initializing Vertex AI embedding model...")
+  initialize_vertex_ai_embedding_model(
+    config.GCP_PROJECT_ID,
+    config.GCP_SPANNER_INSTANCE_ID,
+    config.GCP_SPANNER_DATABASE_NAME,
+    config.GCP_SPANNER_EMBEDDING_MODEL_NAME,
+    config.GCP_VERTEX_AI_EMBEDDING_MODEL_ENDPOINT
   )
   logger.info("Starting API server...")
   uvicorn.run(

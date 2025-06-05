@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from datacommons.db.models.edge import EdgeModel
-from sqlalchemy.types import Text, ARRAY, Float
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,8 +22,9 @@ class EdgeRepository:
   """
   Repository for managing edges in the database.
   """
-  def __init__(self, session: Session):
+  def __init__(self, session: Session, vertex_ai_embedding_model_name: str):
     self.session = session
+    self.vertex_ai_embedding_model_name = vertex_ai_embedding_model_name
 
   def get_edge(self, subject_id: str, predicate: str, object_id: str) -> EdgeModel:
     return self.session.query(EdgeModel).filter(EdgeModel.subject_id == subject_id, EdgeModel.predicate == predicate, EdgeModel.object_id == object_id).first()
@@ -64,7 +63,7 @@ class EdgeRepository:
         e.embeddings.values as embeddings_values
       FROM
         ML.PREDICT(
-          MODEL EmbeddingsModel,
+          MODEL {self.vertex_ai_embedding_model_name},
           TABLE Input
         ) AS e,
         Input AS t

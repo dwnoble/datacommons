@@ -3,6 +3,7 @@ from typing import List, Optional
 import logging
 
 # Third-party imports
+from datacommons.api.core.config import Config
 from datacommons.db.repositories.edge_repository import EdgeRepository
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload, Session
@@ -198,7 +199,7 @@ class GraphService:
   in the graph database, with support for JSON-LD format.
   """
   
-  def __init__(self, session: Session):
+  def __init__(self, session: Session, config: Config):
     """
     Initialize the database service.
     
@@ -300,7 +301,7 @@ class GraphService:
     logger.info("Successfully added all nodes to database: " + str(nodes))
     
     # Add all edges to the session
-    edge_repository = EdgeRepository(self.session)
+    edge_repository = EdgeRepository(self.session, vertex_ai_embedding_model_name=self.config.GCP_VERTEX_AI_EMBEDDING_MODEL_NAME)
     for edge in edges:
       if edge.object_value is None:
         self.session.add(edge)
