@@ -51,20 +51,33 @@ CREATE OR REPLACE PROPERTY GRAPH DCGraph
 """
 
 
-def get_engine(project_id: str, instance_id: str, database_name: str) -> Engine:
-    """Create and return a SQLAlchemy engine for Cloud Spanner.
+def get_engine(
+    project_id: str = "",
+    instance_id: str = "",
+    database_name: str = "",
+    db_backend: str = "spanner",
+    postgres_host: str = "",
+    postgres_port: int = 5432,
+    postgres_database: str = "",
+    postgres_user: str = "",
+    postgres_password: str = "",
+    postgres_sslmode: str = "disable",
+) -> Engine:
+    """Create and return a SQLAlchemy engine for the configured backend."""
+    if db_backend == "spanner":
+        return create_engine(
+            f"spanner+spanner:///projects/{project_id}/instances/{instance_id}/databases/{database_name}",
+        )
 
-    Args:
-      project_id: GCP project ID
-      instance_id: Cloud Spanner instance ID
-      database_name: Cloud Spanner database name
+    if db_backend == "postgres":
+        return create_engine(
+            "postgresql+psycopg://"
+            f"{postgres_user}:{postgres_password}"
+            f"@{postgres_host}:{postgres_port}/{postgres_database}"
+            f"?sslmode={postgres_sslmode}",
+        )
 
-    Returns:
-      SQLAlchemy engine configured for Cloud Spanner
-    """
-    return create_engine(
-        f"spanner+spanner:///projects/{project_id}/instances/{instance_id}/databases/{database_name}",
-    )
+    raise ValueError(f"Unsupported db_backend: {db_backend}")
 
 
 def create_property_graph(engine: Engine):
@@ -79,31 +92,60 @@ def create_property_graph(engine: Engine):
         connection.execute(text(DDL_PROPERTY_GRAPH))
 
 
-def get_session(project_id: str, instance_id: str, database_name: str) -> Session:
-    """Create and return a SQLAlchemy session for Cloud Spanner.
-
-    Args:
-      project_id: GCP project ID
-      instance_id: Cloud Spanner instance ID
-      database_name: Cloud Spanner database name
-
-    Returns:
-      SQLAlchemy session configured for Cloud Spanner
-    """
-    engine = get_engine(project_id, instance_id, database_name)
+def get_session(
+    project_id: str = "",
+    instance_id: str = "",
+    database_name: str = "",
+    db_backend: str = "spanner",
+    postgres_host: str = "",
+    postgres_port: int = 5432,
+    postgres_database: str = "",
+    postgres_user: str = "",
+    postgres_password: str = "",
+    postgres_sslmode: str = "disable",
+) -> Session:
+    """Create and return a SQLAlchemy session for the configured backend."""
+    engine = get_engine(
+        project_id=project_id,
+        instance_id=instance_id,
+        database_name=database_name,
+        db_backend=db_backend,
+        postgres_host=postgres_host,
+        postgres_port=postgres_port,
+        postgres_database=postgres_database,
+        postgres_user=postgres_user,
+        postgres_password=postgres_password,
+        postgres_sslmode=postgres_sslmode,
+    )
     session = sessionmaker(bind=engine)
     return session()
 
 
-def initialize_db(project_id: str, instance_id: str, database_name: str):
-    """Initialize the Spanner database.
-
-    Args:
-      project_id: GCP project ID
-      instance_id: Cloud Spanner instance ID
-      database_name: Cloud Spanner database name
-    """
-    engine = get_engine(project_id, instance_id, database_name)
+def initialize_db(
+    project_id: str = "",
+    instance_id: str = "",
+    database_name: str = "",
+    db_backend: str = "spanner",
+    postgres_host: str = "",
+    postgres_port: int = 5432,
+    postgres_database: str = "",
+    postgres_user: str = "",
+    postgres_password: str = "",
+    postgres_sslmode: str = "disable",
+):
+    """Initialize the configured database backend."""
+    engine = get_engine(
+        project_id=project_id,
+        instance_id=instance_id,
+        database_name=database_name,
+        db_backend=db_backend,
+        postgres_host=postgres_host,
+        postgres_port=postgres_port,
+        postgres_database=postgres_database,
+        postgres_user=postgres_user,
+        postgres_password=postgres_password,
+        postgres_sslmode=postgres_sslmode,
+    )
 
     # Check if database is empty by inspecting existing tables
     inspector = inspect(engine)
@@ -123,4 +165,5 @@ def initialize_db(project_id: str, instance_id: str, database_name: str):
         # Import all models so they are properly initialized with the call to Base.metadata.create_all
         logger.info("Creating tables %s in database %s", REQUIRED_TABLES, database_name)
         Base.metadata.create_all(engine)
-        create_property_graph(engine)
+        if db_backend == "spanner":
+            create_property_graph(engine)

@@ -29,9 +29,16 @@ def with_graph_service() -> Generator[GraphService, None, None]:
     """
     config = get_config()
     db = get_session(
-        config.GCP_PROJECT_ID,
-        config.GCP_SPANNER_INSTANCE_ID,
-        config.GCP_SPANNER_DATABASE_NAME,
+        project_id=config.GCP_PROJECT_ID,
+        instance_id=config.GCP_SPANNER_INSTANCE_ID,
+        database_name=config.GCP_SPANNER_DATABASE_NAME,
+        db_backend=config.DB_BACKEND,
+        postgres_host=config.POSTGRES_HOST,
+        postgres_port=config.POSTGRES_PORT,
+        postgres_database=config.POSTGRES_DATABASE,
+        postgres_user=config.POSTGRES_USER,
+        postgres_password=config.POSTGRES_PASSWORD,
+        postgres_sslmode=config.POSTGRES_SSLMODE,
     )
     graph_service = GraphService(db)
     try:

@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: datacommons-postgres
+    environment:
+      POSTGRES_DB: datacommons
+      POSTGRES_USER: datacommons
+      POSTGRES_PASSWORD: datacommons
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datacommons -d datacommons"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    container_name: datacommons-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_BACKEND: postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DATABASE: datacommons
+      POSTGRES_USER: datacommons
+      POSTGRES_PASSWORD: datacommons
+      POSTGRES_SSLMODE: disable
+    command:
+      - start
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --db-backend
+      - postgres
+      - --postgres-host
+      - postgres
+      - --postgres-port
+      - "5432"
+      - --postgres-database
+      - datacommons
+      - --postgres-user
+      - datacommons
+      - --postgres-password
+      - datacommons
+      - --postgres-sslmode
+      - disable
+    ports:
+      - "5000:5000"
+
+volumes:
+  postgres_data:

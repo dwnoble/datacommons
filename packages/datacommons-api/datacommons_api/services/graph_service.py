@@ -76,7 +76,7 @@ LOCAL_NAMESPACE_URL = f"http://localhost:5000/schema/{LOCAL_NAMESPACE_NAME}/"
 # Payloads larger than this or binary payloads are stored in the 'bytes' column.
 VALUE_COLUMN_MAX_SIZE_BYTES = 10 * 1024 * 1024
 
-DEFAULT_PROVENANCE_ID = "system:unknown_provenance"
+DEFAULT_PROVENANCE_ID = "system:default_provenance"
 
 # --- 1. DATA ABSTRACTION & UTILITIES ---
 
@@ -329,7 +329,7 @@ def extract_edges_from_graph_node(
             NodeRecord(
                 subject_id=DEFAULT_PROVENANCE_ID,
                 types=["system:DefaultNode"],
-                name="Unknown Provenance",
+                name="Default Provenance",
             )
         )
 
@@ -582,14 +582,83 @@ class GraphService:
 
     def __init__(self, session: Session):
         self.session = session
+        self.spanner_db = None
 
-        # Initialize the Spanner database client using system configuration
         config = get_config()
-        client = spanner.Client(project=config.GCP_PROJECT_ID)
-        instance = client.instance(config.GCP_SPANNER_INSTANCE_ID)
-        self.spanner_db = instance.database(config.GCP_SPANNER_DATABASE_NAME)
-        # Silence Spanner client INFO logs
-        self.spanner_db.logger.setLevel(logging.WARNING)
+        backend = str(getattr(config, "DB_BACKEND", "spanner")).lower()
+        if backend != "postgres":
+            # Initialize the Spanner database client using system configuration
+            client = spanner.Client(project=config.GCP_PROJECT_ID)
+            instance = client.instance(config.GCP_SPANNER_INSTANCE_ID)
+            self.spanner_db = instance.database(config.GCP_SPANNER_DATABASE_NAME)
+            # Silence Spanner client INFO logs
+            self.spanner_db.logger.setLevel(logging.WARNING)
+
+    def _insert_graph_nodes_sqlalchemy(self, records: List[NodeRecord]) -> None:
+        """
+        SQLAlchemy write path used for non-Spanner backends (e.g., Postgres).
+        """
+        unique_nodes = {node.subject_id: node for node in records}
+        all_edges = []
+        for node in records:
+            all_edges.extend(getattr(node, "outgoing_edges", []))
+
+        unique_edges = {
+            (
+                edge.subject_id,
+                edge.predicate,
+                edge.object_id,
+                edge.provenance or "",
+            ): edge
+            for edge in all_edges
+        }
+
+        try:
+            for subject_id, node in unique_nodes.items():
+                node_types = list(getattr(node, "types", []) or [])
+                node_bytes = getattr(node, "bytes", b"") or b""
+                node_value = getattr(node, "value", "") or ""
+
+                # Keep compatibility with the Spanner mutation path behavior.
+                if not node_value and not node_bytes and "literal" not in node_types:
+                    node_value = subject_id
+
+                existing_node = self.session.get(NodeRecord, subject_id)
+                if existing_node:
+                    existing_node.name = getattr(node, "name", "") or ""
+                    existing_node.types = node_types
+                    existing_node.value = node_value
+                    existing_node.bytes = node_bytes
+                else:
+                    self.session.add(
+                        NodeRecord(
+                            subject_id=subject_id,
+                            name=getattr(node, "name", "") or "",
+                            types=node_types,
+                            value=node_value,
+                            bytes=node_bytes,
+                        )
+                    )
+
+            if unique_nodes:
+                self.session.query(EdgeRecord).filter(
+                    EdgeRecord.subject_id.in_(list(unique_nodes.keys()))
+                ).delete(synchronize_session=False)
+
+            for edge in unique_edges.values():
+                self.session.add(
+                    EdgeRecord(
+                        subject_id=edge.subject_id,
+                        predicate=edge.predicate,
+                        object_id=edge.object_id,
+                        provenance=edge.provenance or "",
+                    )
+                )
+
+            self.session.commit()
+        except Exception as e:
+            self.session.rollback()
+            raise GraphServiceError(f"Failed to insert nodes via SQLAlchemy: {e}") from e
 
     def insert_graph_nodes(self, jsonld: JSONLDDocument):
         """
@@ -616,7 +685,17 @@ class GraphService:
             all_synthetic_nodes.extend(synthesized_nodes)
 
         if not self.spanner_db:
-            raise GraphServiceError("Spanner database client not initialized.")
+            all_records = all_synthetic_nodes + all_main_nodes
+            total_edges = sum(
+                len(getattr(n, "outgoing_edges", [])) for n in all_records
+            )
+            logger.info(
+                "Inserting %d nodes and %d edges via SQLAlchemy backend",
+                len(all_records),
+                total_edges,
+            )
+            self._insert_graph_nodes_sqlalchemy(all_records)
+            return
 
         # --- Filter existing synthetic nodes ---
         unique_synthetic = {n.subject_id: n for n in all_synthetic_nodes}
@@ -740,7 +819,11 @@ class GraphService:
         Deletes a node. Spanner interleaving triggers a cascading delete of edges.
         """
         if not self.spanner_db:
-            raise GraphServiceError("Spanner database client not initialized.")
+            node = self.session.get(NodeRecord, subject_id)
+            if node:
+                self.session.delete(node)
+                self.session.commit()
+            return
 
         with self.spanner_db.batch() as batch:
             batch.delete(table="Node", keyset=spanner.KeySet(keys=[subject_id]))

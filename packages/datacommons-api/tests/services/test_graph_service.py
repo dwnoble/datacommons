@@ -347,6 +347,37 @@ def test_node_deletion_cascade(graph_service, mock_spanner_batch):
     assert node_delete.kwargs["keyset"].keys == ["test_node_id"]
 
 
+def test_insert_graph_nodes_postgres_backend_uses_sqlalchemy(mock_session):
+    with patch("datacommons_api.services.graph_service.get_config") as mock_get_config:
+        mock_config_instance = MagicMock(spec=Config)
+        mock_config_instance.DB_BACKEND = "postgres"
+        mock_get_config.return_value = mock_config_instance
+
+        service = GraphService(session=mock_session)
+        payload = JSONLDDocument(
+            **{
+                "@context": {},
+                "@graph": [
+                    {
+                        "@id": "dcid:California",
+                        "@type": "schema:State",
+                        "name": "California",
+                    }
+                ],
+            }
+        )
+
+        # Default mock behavior for upsert path
+        mock_session.get.return_value = None
+        delete_query = MagicMock()
+        mock_session.query.return_value.filter.return_value = delete_query
+
+        service.insert_graph_nodes(payload)
+
+        mock_session.commit.assert_called_once()
+        mock_session.rollback.assert_not_called()
+
+
 # 2.3 Go-Consumer Compatibility
 def test_strict_non_nulls(mock_spanner_batch):
     n1 = NodeRecord(subject_id="n1", types=["T"])

@@ -17,6 +17,7 @@ classifiers = [
 ]
 dependencies = [
   "sqlalchemy",
+  "psycopg[binary]>=3.2.0",
   "sqlalchemy-spanner",
   "google-cloud-spanner",
   "setuptools<=80.0.0", # Pin version to <=80 to avoid https://stackoverflow.com/questions/76043689/pkg-resources-is-deprecated-as-an-api
