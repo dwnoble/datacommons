@@ -18,10 +18,25 @@ from sqlalchemy import Engine, create_engine, inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 from datacommons_db.models.base import Base
+from datacommons_db.models.edge import EDGE_TABLE_NAME
+from datacommons_db.models.node import NODE_TABLE_NAME
+from datacommons_db.models.observation import (
+    OBSERVATION_ATTRIBUTE_TABLE_NAME,
+    OBSERVATION_TABLE_NAME,
+    TIMESERIES_ATTRIBUTE_TABLE_NAME,
+    TIMESERIES_TABLE_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_TABLES = ["Edge", "Node", "Observation"]
+REQUIRED_TABLES = [
+    NODE_TABLE_NAME,
+    EDGE_TABLE_NAME,
+    TIMESERIES_TABLE_NAME,
+    TIMESERIES_ATTRIBUTE_TABLE_NAME,
+    OBSERVATION_TABLE_NAME,
+    OBSERVATION_ATTRIBUTE_TABLE_NAME,
+]
 
 
 # DDL for Creating Property Graph
@@ -90,6 +105,32 @@ def create_property_graph(engine: Engine):
 
     with engine.begin() as connection:
         connection.execute(text(DDL_PROPERTY_GRAPH))
+
+
+def enable_spanner_columnar_policy(engine: Engine):
+    """Enable Spanner columnar policy for observation tables when available."""
+    from sqlalchemy import text
+
+    columnar_tables = [
+        TIMESERIES_TABLE_NAME,
+        TIMESERIES_ATTRIBUTE_TABLE_NAME,
+        OBSERVATION_TABLE_NAME,
+        OBSERVATION_ATTRIBUTE_TABLE_NAME,
+    ]
+    with engine.begin() as connection:
+        for table_name in columnar_tables:
+            try:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} SET OPTIONS (columnar_policy = 'enabled')"
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not enable columnar policy for table %s: %s",
+                    table_name,
+                    e,
+                )
 
 
 def get_session(
@@ -167,3 +208,4 @@ def initialize_db(
         Base.metadata.create_all(engine)
         if db_backend == "spanner":
             create_property_graph(engine)
+            enable_spanner_columnar_policy(engine)
