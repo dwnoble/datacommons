@@ -14,11 +14,12 @@
 
 import logging
 
-from sqlalchemy import Engine, create_engine, inspect
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from datacommons_db.models.base import Base
 from datacommons_db.models.edge import EDGE_TABLE_NAME
+from datacommons_db.models.namespace import NAMESPACE_TABLE_NAME
 from datacommons_db.models.node import NODE_TABLE_NAME
 from datacommons_db.models.observation import (
     OBSERVATION_ATTRIBUTE_TABLE_NAME,
@@ -30,6 +31,7 @@ from datacommons_db.models.observation import (
 logger = logging.getLogger(__name__)
 
 REQUIRED_TABLES = [
+    NAMESPACE_TABLE_NAME,
     NODE_TABLE_NAME,
     EDGE_TABLE_NAME,
     TIMESERIES_TABLE_NAME,
@@ -209,3 +211,51 @@ def initialize_db(
         if db_backend == "spanner":
             create_property_graph(engine)
             enable_spanner_columnar_policy(engine)
+
+    if db_backend == "postgres":
+        _ensure_postgres_schema_compatibility(engine)
+
+
+def _ensure_postgres_schema_compatibility(engine: Engine) -> None:
+    """Apply lightweight compatibility DDL for pre-existing Postgres schemas."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    with engine.begin() as connection:
+        if NODE_TABLE_NAME in existing_tables:
+            node_columns = {c["name"] for c in inspector.get_columns(NODE_TABLE_NAME)}
+            if "namespace_name" not in node_columns:
+                logger.info(
+                    "Adding missing column %s.namespace_name with default 'local'",
+                    NODE_TABLE_NAME,
+                )
+                connection.execute(
+                    text(
+                        'ALTER TABLE "Node" '
+                        "ADD COLUMN IF NOT EXISTS namespace_name VARCHAR(128) "
+                        "NOT NULL DEFAULT 'local'"
+                    )
+                )
+            connection.execute(
+                text(
+                    'CREATE INDEX IF NOT EXISTS "NodeByNamespace" '
+                    'ON "Node" (namespace_name)'
+                )
+            )
+
+        if TIMESERIES_TABLE_NAME in existing_tables:
+            timeseries_columns = {
+                c["name"] for c in inspector.get_columns(TIMESERIES_TABLE_NAME)
+            }
+            if "namespace_name" not in timeseries_columns:
+                logger.info(
+                    "Adding missing column %s.namespace_name with default 'local'",
+                    TIMESERIES_TABLE_NAME,
+                )
+                connection.execute(
+                    text(
+                        'ALTER TABLE "TimeSeries" '
+                        "ADD COLUMN IF NOT EXISTS namespace_name VARCHAR(128) "
+                        "NOT NULL DEFAULT 'local'"
+                    )
+                )

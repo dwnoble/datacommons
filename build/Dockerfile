@@ -11,6 +11,7 @@ COPY pyproject.toml uv.lock ./
 
 # Copy the package directories
 COPY packages/ ./packages/
+COPY schema/ ./schema/
 
 # Install the dependencies and the project itself
 # uv sync --frozen installs everything from the lockfile.

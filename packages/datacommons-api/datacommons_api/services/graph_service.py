@@ -32,6 +32,14 @@ from sqlalchemy.orm import Session, joinedload
 
 from datacommons_api.core.config import get_config
 from datacommons_api.core.constants import DEFAULT_NODE_FETCH_LIMIT
+from datacommons_api.services.namespace_service import (
+    DEFAULT_NAMESPACES,
+    LOCAL_NAMESPACE_NAME,
+    LOCAL_NAMESPACE_URL,
+    NamespaceService,
+    ensure_qualified_identifier,
+    extract_namespace_name,
+)
 from datacommons_db.models.edge import EdgeRecord, EDGE_TABLE_NAME
 from datacommons_db.models.node import NodeRecord, NODE_TABLE_NAME
 from datacommons_schema.models.jsonld import (
@@ -56,20 +64,11 @@ class GraphServiceError(Exception):
     """
 
 
-# Namespace configuration
 BASE_NAMESPACES = {
-    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    entry["name"]: entry["url"]
+    for entry in DEFAULT_NAMESPACES
+    if entry["name"] in {"rdf", "rdfs", "xsd"}
 }
-
-NAMESPACES = {
-    "dc": "https://datacommons.org/browser/",
-    "schema": "https://schema.org/",
-}
-
-LOCAL_NAMESPACE_NAME = "local"
-LOCAL_NAMESPACE_URL = f"http://localhost:5000/schema/{LOCAL_NAMESPACE_NAME}/"
 
 
 # Threshold for Spanner STRING columns (10MB)
@@ -77,11 +76,13 @@ LOCAL_NAMESPACE_URL = f"http://localhost:5000/schema/{LOCAL_NAMESPACE_NAME}/"
 VALUE_COLUMN_MAX_SIZE_BYTES = 10 * 1024 * 1024
 
 DEFAULT_PROVENANCE_ID = "system:default_provenance"
+LEGACY_LITERAL_TYPE = "literal"
+XSD_LITERAL_TYPES = {"xsd:string", "xsd:boolean", "xsd:integer", "xsd:double"}
 
 # --- 1. DATA ABSTRACTION & UTILITIES ---
 
 # Combine all known namespaces for lookup
-ALL_NAMESPACES = {**BASE_NAMESPACES, **NAMESPACES}
+ALL_NAMESPACES = {entry["name"]: entry["url"] for entry in DEFAULT_NAMESPACES}
 
 
 def normalize_graph_id(
@@ -90,8 +91,8 @@ def normalize_graph_id(
     """
     Normalizes an ID and detects if it is a remote node.
     - Converts full URIs to shortform CURIEs (http://schema.org/Person -> schema:Person).
-    - Preserves already-shortform remote IDs (schema:Person -> schema:Person).
-    - Strips prefixes from local nodes.
+    - Preserves already-shortform IDs (schema:Person -> schema:Person).
+    - Uses explicit local namespace for unqualified local nodes.
 
     Returns:
         Tuple of (normalized_id: str, is_remote: bool)
@@ -113,7 +114,7 @@ def normalize_graph_id(
     # 2. Check if it's already a known shortform (e.g., "schema:Person")
     for prefix in known_prefixes:
         if identifier.startswith(f"{prefix}:"):
-            return identifier, True
+            return identifier, prefix != LOCAL_NAMESPACE_NAME
 
     # 3. Check if it's a full URI (e.g., "http://schema.org/Person")
     # Sort URIs by length descending to match more specific namespaces first
@@ -123,21 +124,25 @@ def normalize_graph_id(
         if identifier.startswith(uri):
             # Convert full URI to shortform!
             shortform = identifier.replace(uri, f"{prefix}:", 1)
-            return shortform, True
+            return shortform, prefix != LOCAL_NAMESPACE_NAME
 
         # Fallback to allow http:// prefixes for https:// vocabularies
         if uri.startswith("https://"):
             http_uri = "http://" + uri[8:]
             if identifier.startswith(http_uri):
                 shortform = identifier.replace(http_uri, f"{prefix}:", 1)
-                return shortform, True
+                return shortform, prefix != LOCAL_NAMESPACE_NAME
+
+    # 3b. Treat other absolute IRIs as remote even if no known prefix mapping exists.
+    if identifier.startswith("http://") or identifier.startswith("https://"):
+        return identifier, True
 
     # 3. Check if it's a generated literal ID (do not strip these)
     if identifier.startswith("l/"):
         return identifier, False
 
-    # 4. Otherwise, it is a local node. Strip any local prefixes like "dcid:"
-    return identifier.split(":")[-1], False
+    # 4. Otherwise, it is a local node. Use explicit local namespace.
+    return ensure_qualified_identifier(identifier), False
 
 
 def coerce_node_record_value(content: Any) -> dict[str, Any]:
@@ -165,6 +170,23 @@ def coerce_node_record_value(content: Any) -> dict[str, Any]:
         return {"value": str_val, "bytes": b""}
 
     return {"value": "", "bytes": encoded_val}
+
+
+def get_xsd_literal_type(content: Any) -> str:
+    """Returns the xsd datatype used for synthesized literal nodes."""
+    if isinstance(content, bool):
+        return "xsd:boolean"
+    if isinstance(content, int):
+        return "xsd:integer"
+    if isinstance(content, float):
+        return "xsd:double"
+    return "xsd:string"
+
+
+def is_literal_node_types(types: list[str] | None) -> bool:
+    if not types:
+        return False
+    return any(t in XSD_LITERAL_TYPES or t == LEGACY_LITERAL_TYPE for t in types)
 
 
 def get_value_from_node_record(record: Any) -> Union[str, None]:
@@ -213,6 +235,7 @@ def create_node_record(
     # Use getattr for resilience against dynamic Pydantic attributes
     # Pass context to normalizer
     subject_id = normalize_graph_id(getattr(graph_node, "id", None), context)[0]
+    namespace_name = extract_namespace_name(subject_id) or LOCAL_NAMESPACE_NAME
     name = getattr(graph_node, "name", "") or ""
 
     raw_type = getattr(graph_node, "type", [])
@@ -227,6 +250,7 @@ def create_node_record(
 
     return NodeRecord(
         subject_id=subject_id,
+        namespace_name=namespace_name,
         name=name or "",
         # Pass context to normalizer
         types=[normalize_graph_id(t, context)[0] for t in types if t is not None],
@@ -318,6 +342,8 @@ def extract_edges_from_graph_node(
             synthesized_nodes.append(
                 NodeRecord(
                     subject_id=fallback_prov,
+                    namespace_name=extract_namespace_name(fallback_prov)
+                    or LOCAL_NAMESPACE_NAME,
                     types=["schema:ExternalProxy", "provenance_stub"],
                 )
             )
@@ -328,6 +354,8 @@ def extract_edges_from_graph_node(
         synthesized_nodes.append(
             NodeRecord(
                 subject_id=DEFAULT_PROVENANCE_ID,
+                namespace_name=extract_namespace_name(DEFAULT_PROVENANCE_ID)
+                or LOCAL_NAMESPACE_NAME,
                 types=["system:DefaultNode"],
                 name="Default Provenance",
             )
@@ -348,6 +376,8 @@ def extract_edges_from_graph_node(
             synthesized_nodes.append(
                 NodeRecord(
                     subject_id=predicate,
+                    namespace_name=extract_namespace_name(predicate)
+                    or LOCAL_NAMESPACE_NAME,
                     types=["schema:ExternalProxy", "predicate_stub"],
                 )
             )
@@ -366,6 +396,8 @@ def extract_edges_from_graph_node(
                     synthesized_nodes.append(
                         NodeRecord(
                             subject_id=target_id,
+                            namespace_name=extract_namespace_name(target_id)
+                            or LOCAL_NAMESPACE_NAME,
                             types=["schema:ExternalProxy"],
                             name=val.get(
                                 "name", ""
@@ -383,6 +415,8 @@ def extract_edges_from_graph_node(
                         synthesized_nodes.append(
                             NodeRecord(
                                 subject_id=edge_prov,
+                                namespace_name=extract_namespace_name(edge_prov)
+                                or LOCAL_NAMESPACE_NAME,
                                 types=["schema:ExternalProxy", "provenance_stub"],
                             )
                         )
@@ -405,7 +439,8 @@ def extract_edges_from_graph_node(
                 synthesized_nodes.append(
                     NodeRecord(
                         subject_id=lit_id,
-                        types=["literal"],
+                        namespace_name=LOCAL_NAMESPACE_NAME,
+                        types=[get_xsd_literal_type(val)],
                         **coerce_node_record_value(val),
                     )
                 )
@@ -452,7 +487,7 @@ def node_record_to_graph_node(record: NodeRecord) -> GraphNode:
 
         if not target:
             prop_val["@id"] = edge.object_id
-        elif "literal" in target.types:
+        elif is_literal_node_types(getattr(target, "types", [])):
             # FIX #5: Wrap literal values in "@value"
             prop_val["@value"] = get_value_from_node_record(target)
         elif "schema:ExternalProxy" in target.types:
@@ -527,7 +562,13 @@ def insert_records_batch(records: List[NodeRecord], spanner_batch: Any):
 
     # 4. Define Go-compatible fallbacks for non-nullable columns
     # (in case literal nodes or incomplete models are missing them)
-    node_defaults = {"name": "", "types": [], "value": "", "bytes": b""}
+    node_defaults = {
+        "namespace_name": LOCAL_NAMESPACE_NAME,
+        "name": "",
+        "types": [],
+        "value": "",
+        "bytes": b"",
+    }
 
     # 5. Insert/Update Nodes
     node_values = []
@@ -541,7 +582,7 @@ def insert_records_batch(records: List[NodeRecord], spanner_batch: Any):
 
             # Write id to value if it's empty and this isn't a literal node
             if col == "value" and not val and not getattr(n, "bytes", b""):
-                if "literal" not in getattr(n, "types", []):
+                if not is_literal_node_types(getattr(n, "types", [])):
                     val = n.subject_id
 
             row.append(val)
@@ -585,8 +626,8 @@ class GraphService:
         self.spanner_db = None
 
         config = get_config()
-        backend = str(getattr(config, "DB_BACKEND", "spanner")).lower()
-        if backend != "postgres":
+        self.backend = str(getattr(config, "DB_BACKEND", "spanner")).lower()
+        if self.backend != "postgres":
             # Initialize the Spanner database client using system configuration
             client = spanner.Client(project=config.GCP_PROJECT_ID)
             instance = client.instance(config.GCP_SPANNER_INSTANCE_ID)
@@ -618,13 +659,21 @@ class GraphService:
                 node_types = list(getattr(node, "types", []) or [])
                 node_bytes = getattr(node, "bytes", b"") or b""
                 node_value = getattr(node, "value", "") or ""
+                namespace_name = (
+                    extract_namespace_name(subject_id) or LOCAL_NAMESPACE_NAME
+                )
 
                 # Keep compatibility with the Spanner mutation path behavior.
-                if not node_value and not node_bytes and "literal" not in node_types:
+                if (
+                    not node_value
+                    and not node_bytes
+                    and not is_literal_node_types(node_types)
+                ):
                     node_value = subject_id
 
                 existing_node = self.session.get(NodeRecord, subject_id)
                 if existing_node:
+                    existing_node.namespace_name = namespace_name
                     existing_node.name = getattr(node, "name", "") or ""
                     existing_node.types = node_types
                     existing_node.value = node_value
@@ -633,6 +682,7 @@ class GraphService:
                     self.session.add(
                         NodeRecord(
                             subject_id=subject_id,
+                            namespace_name=namespace_name,
                             name=getattr(node, "name", "") or "",
                             types=node_types,
                             value=node_value,
@@ -660,6 +710,31 @@ class GraphService:
             self.session.rollback()
             raise GraphServiceError(f"Failed to insert nodes via SQLAlchemy: {e}") from e
 
+    def _validate_identifier_namespaces(self, records: List[NodeRecord]) -> None:
+        known_namespaces = NamespaceService(self.session).namespace_name_set()
+        unknown_prefixes = set()
+
+        for node in records:
+            node_prefix = extract_namespace_name(getattr(node, "subject_id", None))
+            if node_prefix and node_prefix not in known_namespaces:
+                unknown_prefixes.add(node_prefix)
+
+            for edge in getattr(node, "outgoing_edges", []):
+                for identifier in (
+                    edge.subject_id,
+                    edge.predicate,
+                    edge.object_id,
+                    edge.provenance,
+                ):
+                    prefix = extract_namespace_name(identifier)
+                    if prefix and prefix not in known_namespaces:
+                        unknown_prefixes.add(prefix)
+
+        if unknown_prefixes:
+            raise GraphServiceError(
+                "unknown namespace prefix(es): %s" % ", ".join(sorted(unknown_prefixes))
+            )
+
     def insert_graph_nodes(self, jsonld: JSONLDDocument):
         """
         Processes a JSON-LD document and performs a batched ingestion.
@@ -684,8 +759,10 @@ class GraphService:
             all_main_nodes.append(node_record)
             all_synthetic_nodes.extend(synthesized_nodes)
 
+        all_records = all_synthetic_nodes + all_main_nodes
+        self._validate_identifier_namespaces(all_records)
+
         if not self.spanner_db:
-            all_records = all_synthetic_nodes + all_main_nodes
             total_edges = sum(
                 len(getattr(n, "outgoing_edges", [])) for n in all_records
             )
@@ -809,7 +886,7 @@ class GraphService:
             context={
                 "@vocab": LOCAL_NAMESPACE_URL,
                 LOCAL_NAMESPACE_NAME: LOCAL_NAMESPACE_URL,
-                **BASE_NAMESPACES,
+                **ALL_NAMESPACES,
             },
             graph=graph,
         )
@@ -832,6 +909,15 @@ class GraphService:
         """
         Maintenance cleanup for the Graph schema and data.
         """
+        if self.backend == "postgres":
+            logger.info('Dropping table "%s" if it exists', EDGE_TABLE_NAME)
+            self.session.execute(text('DROP TABLE IF EXISTS "Edge"'))
+            logger.info('Dropping table "%s" if it exists', NODE_TABLE_NAME)
+            self.session.execute(text('DROP TABLE IF EXISTS "Node" CASCADE'))
+            self.session.commit()
+            logger.info("Successfully dropped Node and Edge tables")
+            return
+
         logger.info("Dropping table %s", EDGE_TABLE_NAME)
         query = f"DROP TABLE {EDGE_TABLE_NAME}"
         self.session.execute(text(query))

@@ -12,19 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import FastAPI
+from pydantic import BaseModel
 
-from datacommons_api.endpoints.routers import namespace_router, node_router
 
-# FastAPI initialization
-app = FastAPI(
-    title="Data Commons API",
-    version="0.1.0",
-    openapi_url="/openapi.json",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    debug=True,
-)
+class NamespaceResponse(BaseModel):
+    name: str
+    url: str
+    is_readonly: bool
+    is_datacommons: bool
+    description: str | None = None
 
-app.include_router(node_router.router, tags=["nodes"])
-app.include_router(namespace_router.router, tags=["namespaces"])
+
+class NamespaceCreateRequest(BaseModel):
+    name: str
+    url: str
+    is_readonly: bool = False
+    is_datacommons: bool = False
+    description: str | None = None
+
+
+class NamespacePatchRequest(BaseModel):
+    url: str | None = None
+    is_readonly: bool | None = None
+    is_datacommons: bool | None = None
+    description: str | None = None

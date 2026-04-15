@@ -30,6 +30,7 @@ from datacommons_api.services.graph_service import (
     create_node_record,
     create_edge_record,
     extract_edges_from_graph_node,
+    get_xsd_literal_type,
     node_record_to_graph_node,
     insert_records_batch,
 )
@@ -56,9 +57,9 @@ def test_normalize_graph_id():
     # 3. Generated Literals (Local, do not strip prefix)
     assert normalize_graph_id("l/123xyz") == ("l/123xyz", False)
 
-    # 4. Standard Local Nodes (Strip prefixes)
-    assert normalize_graph_id("dcid:California") == ("California", False)
-    assert normalize_graph_id("name") == ("name", False)
+    # 4. Standard Local Nodes (Canonical local namespace)
+    assert normalize_graph_id("dcid:California") == ("dcid:California", True)
+    assert normalize_graph_id("name") == ("local:name", False)
     assert normalize_graph_id("") == ("", False)
     assert normalize_graph_id(None) == (None, False)
 
@@ -132,12 +133,19 @@ def test_generate_literal_id_collision():
     assert generate_literal_id("A") != generate_literal_id("B")
 
 
+def test_get_xsd_literal_type():
+    assert get_xsd_literal_type("abc") == "xsd:string"
+    assert get_xsd_literal_type(True) == "xsd:boolean"
+    assert get_xsd_literal_type(123) == "xsd:integer"
+    assert get_xsd_literal_type(12.3) == "xsd:double"
+
+
 # 1.3 Model Mapping
 def test_create_node_record_standard():
     # Use @ aliases in constructor for GraphNode compatibility
     gn = GraphNode(**{"@id": "dcid:California", "@type": ["schema:State"]})
     record = create_node_record(gn)
-    assert record.subject_id == "California"
+    assert record.subject_id == "dcid:California"
     assert record.types == ["schema:State"]
 
 
@@ -166,7 +174,19 @@ def test_extract_edges_from_graph_node_mixed():
     # The literal node gets appended first in the extraction loop
     # Wait, the fallback prov is generated before the loop in graph_service.py line 242!
     assert synthesized_nodes[0].types == ["system:DefaultNode"]
-    assert synthesized_nodes[1].types == ["literal"]
+    assert synthesized_nodes[1].types == ["xsd:string"]
+
+
+@pytest.mark.parametrize(
+    ("literal_value", "expected_type"),
+    [(True, "xsd:boolean"), (42, "xsd:integer"), (3.14, "xsd:double")],
+)
+def test_extract_edges_from_graph_node_typed_literals(literal_value, expected_type):
+    gn = GraphNode(**{"@id": "n1", "p": literal_value})
+    _, synthesized_nodes = extract_edges_from_graph_node(gn)
+    literal_nodes = [n for n in synthesized_nodes if n.subject_id.startswith("l/")]
+    assert len(literal_nodes) == 1
+    assert literal_nodes[0].types == [expected_type]
 
 
 def test_create_edge_record_validation():
@@ -196,15 +216,28 @@ def test_extract_edges_from_graph_node_granular_provenance():
     edges, synthesized_nodes = extract_edges_from_graph_node(gn)
 
     assert len(edges) == 1
-    assert edges[0].provenance == "edge_level_prov", (
+    assert edges[0].provenance == "prov:edge_level_prov", (
         "Expected edge-level provenance to override top-level provenance"
+    )
+
+
+def test_extract_edges_from_graph_node_absolute_iri_synthesizes_proxy():
+    target_iri = "https://www.w3.org/TR/json-ld11/#the-rdf-compoundliteral-class-and-the-rdf-language-and-rdf-direction-properties"
+    gn = GraphNode(**{"@id": "n1", "seeAlso": {"@id": target_iri}})
+    edges, synthesized_nodes = extract_edges_from_graph_node(gn)
+
+    assert len(edges) == 1
+    assert edges[0].object_id == target_iri
+    assert any(
+        n.subject_id == target_iri and "schema:ExternalProxy" in (n.types or [])
+        for n in synthesized_nodes
     )
 
 
 # 1.5 Extraction Logic
 def test_node_record_to_graph_node_collapse():
     lit_id = generate_literal_id("Value")
-    lit_node = NodeRecord(subject_id=lit_id, types=["literal"], value="Value")
+    lit_node = NodeRecord(subject_id=lit_id, types=["xsd:string"], value="Value")
 
     source = NodeRecord(subject_id="s1", types=["T"])
     edge = EdgeRecord(subject_id="s1", predicate="name", object_id=lit_id)
@@ -270,7 +303,7 @@ def graph_service(mock_session, mock_config, mock_spanner_client):
 
 
 def test_insert_records_batch_deduplication(mock_spanner_batch):
-    lit = NodeRecord(subject_id="l/shared", types=["literal"], value="USA")
+    lit = NodeRecord(subject_id="l/shared", types=["xsd:string"], value="USA")
     n1 = NodeRecord(subject_id="n1", types=["T"])
     n2 = NodeRecord(subject_id="n2", types=["T"])
 
@@ -314,16 +347,19 @@ def test_get_node_record_batches_splitting():
 
 # 2.2 Cascading & Cleanup
 def test_drop_tables_logic(mock_session):
-    with patch("datacommons_api.services.graph_service.get_config"):
+    with patch("datacommons_api.services.graph_service.get_config") as mock_get_config:
         with patch("datacommons_api.services.graph_service.spanner.Client"):
+            mock_cfg = MagicMock(spec=Config)
+            mock_cfg.DB_BACKEND = "postgres"
+            mock_get_config.return_value = mock_cfg
             from datacommons_api.services.graph_service import GraphService
 
             service = GraphService(session=mock_session)
             service.drop_tables()
 
             calls = [str(c[0][0]).upper() for c in mock_session.execute.call_args_list]
-            assert any("DROP TABLE EDGE" in c for c in calls)
-            assert any("DROP TABLE NODE" in c for c in calls)
+            assert any('DROP TABLE IF EXISTS "EDGE"' in c for c in calls)
+            assert any('DROP TABLE IF EXISTS "NODE" CASCADE' in c for c in calls)
 
 
 def test_node_deletion_cascade(graph_service, mock_spanner_batch):
@@ -407,7 +443,7 @@ def test_jsonld_round_trip(graph_service, mock_session, mock_spanner_batch):
     original_doc = JSONLDDocument(context={}, graph=[GraphNode(**original_json)])
 
     lit_id = generate_literal_id("California")
-    lit_node = NodeRecord(subject_id=lit_id, types=["literal"], value="California")
+    lit_node = NodeRecord(subject_id=lit_id, types=["xsd:string"], value="California")
     root = NodeRecord(subject_id="geoId/06", types=["State"])
     e1 = EdgeRecord(subject_id="geoId/06", predicate="name", object_id=lit_id)
     e1.target_node = lit_node
@@ -478,8 +514,8 @@ def test_insert_graph_nodes_proxy_synthesis(
     for row in node_values:
         subj_id = row[0]
         types = row[
-            4
-        ]  # Based on NodeRecord __table__.columns (subject_id, name, value, bytes, types)
+            5
+        ]  # Based on NodeRecord __table__.columns (subject_id, namespace_name, name, value, bytes, types)
         inserted_node_ids.add(subj_id)
 
         # Verify if the proxy node is in the Node insertions
@@ -487,13 +523,13 @@ def test_insert_graph_nodes_proxy_synthesis(
             proxy_found = True
             assert types == ["schema:ExternalProxy"]  # Verifying the tag logic!
 
-    assert "geoId/NewYork" in inserted_node_ids
+    assert "local:geoId/NewYork" in inserted_node_ids
     assert proxy_found, "Proxy node for schema:Country was not generated or inserted"
 
     # 5. Check edge points appropriately
     edge_values = edge_calls[0].kwargs["values"]
     found_edge = False
     for row in edge_values:
-        if row[0] == "geoId/NewYork" and row[2] == "schema:Country":
+        if row[0] == "local:geoId/NewYork" and row[2] == "schema:Country":
             found_edge = True
     assert found_edge, "Edge pointing to proxy node was not correctly formatted"

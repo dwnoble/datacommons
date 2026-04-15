@@ -31,6 +31,7 @@ class TimeSeriesRecord(Base):
     __tablename__ = TIMESERIES_TABLE_NAME
 
     id = sa.Column(String(1024), primary_key=True, autoincrement=False)
+    namespace_name = sa.Column(String(128), nullable=False, default="local")
     variable_measured = sa.Column(String(1024), sa.ForeignKey("Node.subject_id"))
     facet_id = sa.Column(String(1024), sa.ForeignKey("Node.subject_id"))
     import_name = sa.Column(String(1024))

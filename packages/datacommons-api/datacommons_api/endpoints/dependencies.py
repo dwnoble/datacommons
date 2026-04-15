@@ -17,6 +17,7 @@ from collections.abc import Generator
 
 from datacommons_api.core.config import get_config
 from datacommons_api.services.graph_service import GraphService
+from datacommons_api.services.namespace_service import NamespaceService
 from datacommons_db.session import get_session
 
 
@@ -43,5 +44,27 @@ def with_graph_service() -> Generator[GraphService, None, None]:
     graph_service = GraphService(db)
     try:
         yield graph_service
+    finally:
+        db.close()
+
+
+def with_namespace_service() -> Generator[NamespaceService, None, None]:
+    """FastAPI dependency for namespace operations."""
+    config = get_config()
+    db = get_session(
+        project_id=config.GCP_PROJECT_ID,
+        instance_id=config.GCP_SPANNER_INSTANCE_ID,
+        database_name=config.GCP_SPANNER_DATABASE_NAME,
+        db_backend=config.DB_BACKEND,
+        postgres_host=config.POSTGRES_HOST,
+        postgres_port=config.POSTGRES_PORT,
+        postgres_database=config.POSTGRES_DATABASE,
+        postgres_user=config.POSTGRES_USER,
+        postgres_password=config.POSTGRES_PASSWORD,
+        postgres_sslmode=config.POSTGRES_SSLMODE,
+    )
+    namespace_service = NamespaceService(db)
+    try:
+        yield namespace_service
     finally:
         db.close()

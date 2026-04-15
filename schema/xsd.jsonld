@@ -1,0 +1,394 @@
+{
+  "@context": {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@graph": [
+    {
+      "@id": "xsd:ENTITIES",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "ENTITIES"
+      }
+    },
+    {
+      "@id": "xsd:ENTITY",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "ENTITY"
+      }
+    },
+    {
+      "@id": "xsd:ID",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "ID"
+      }
+    },
+    {
+      "@id": "xsd:IDREF",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "IDREF"
+      }
+    },
+    {
+      "@id": "xsd:IDREFS",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "IDREFS"
+      }
+    },
+    {
+      "@id": "xsd:NCName",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "NCName"
+      }
+    },
+    {
+      "@id": "xsd:NMTOKEN",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "NMTOKEN"
+      }
+    },
+    {
+      "@id": "xsd:NMTOKENS",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "NMTOKENS"
+      }
+    },
+    {
+      "@id": "xsd:NOTATION",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "NOTATION"
+      }
+    },
+    {
+      "@id": "xsd:Name",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "Name"
+      }
+    },
+    {
+      "@id": "xsd:QName",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "QName"
+      }
+    },
+    {
+      "@id": "xsd:allNNI",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "allNNI"
+      }
+    },
+    {
+      "@id": "xsd:anyURI",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "anyURI"
+      }
+    },
+    {
+      "@id": "xsd:base64Binary",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "base64Binary"
+      }
+    },
+    {
+      "@id": "xsd:blockSet",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "blockSet"
+      }
+    },
+    {
+      "@id": "xsd:boolean",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "boolean"
+      }
+    },
+    {
+      "@id": "xsd:byte",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "byte"
+      }
+    },
+    {
+      "@id": "xsd:date",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "date"
+      }
+    },
+    {
+      "@id": "xsd:dateTime",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "dateTime"
+      }
+    },
+    {
+      "@id": "xsd:decimal",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "decimal"
+      }
+    },
+    {
+      "@id": "xsd:derivationControl",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "derivationControl"
+      }
+    },
+    {
+      "@id": "xsd:derivationSet",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "derivationSet"
+      }
+    },
+    {
+      "@id": "xsd:double",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "double"
+      }
+    },
+    {
+      "@id": "xsd:duration",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "duration"
+      }
+    },
+    {
+      "@id": "xsd:float",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "float"
+      }
+    },
+    {
+      "@id": "xsd:formChoice",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "formChoice"
+      }
+    },
+    {
+      "@id": "xsd:fullDerivationSet",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "fullDerivationSet"
+      }
+    },
+    {
+      "@id": "xsd:gDay",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "gDay"
+      }
+    },
+    {
+      "@id": "xsd:gMonth",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "gMonth"
+      }
+    },
+    {
+      "@id": "xsd:gMonthDay",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "gMonthDay"
+      }
+    },
+    {
+      "@id": "xsd:gYear",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "gYear"
+      }
+    },
+    {
+      "@id": "xsd:gYearMonth",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "gYearMonth"
+      }
+    },
+    {
+      "@id": "xsd:hexBinary",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "hexBinary"
+      }
+    },
+    {
+      "@id": "xsd:int",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "int"
+      }
+    },
+    {
+      "@id": "xsd:integer",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "integer"
+      }
+    },
+    {
+      "@id": "xsd:language",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "language"
+      }
+    },
+    {
+      "@id": "xsd:long",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "long"
+      }
+    },
+    {
+      "@id": "xsd:namespaceList",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "namespaceList"
+      }
+    },
+    {
+      "@id": "xsd:negativeInteger",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "negativeInteger"
+      }
+    },
+    {
+      "@id": "xsd:nonNegativeInteger",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "nonNegativeInteger"
+      }
+    },
+    {
+      "@id": "xsd:nonPositiveInteger",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "nonPositiveInteger"
+      }
+    },
+    {
+      "@id": "xsd:normalizedString",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "normalizedString"
+      }
+    },
+    {
+      "@id": "xsd:positiveInteger",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "positiveInteger"
+      }
+    },
+    {
+      "@id": "xsd:public",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "public"
+      }
+    },
+    {
+      "@id": "xsd:reducedDerivationControl",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "reducedDerivationControl"
+      }
+    },
+    {
+      "@id": "xsd:short",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "short"
+      }
+    },
+    {
+      "@id": "xsd:simpleDerivationSet",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "simpleDerivationSet"
+      }
+    },
+    {
+      "@id": "xsd:string",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "string"
+      }
+    },
+    {
+      "@id": "xsd:time",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "time"
+      }
+    },
+    {
+      "@id": "xsd:token",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "token"
+      }
+    },
+    {
+      "@id": "xsd:typeDerivationControl",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "typeDerivationControl"
+      }
+    },
+    {
+      "@id": "xsd:unsignedByte",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "unsignedByte"
+      }
+    },
+    {
+      "@id": "xsd:unsignedInt",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "unsignedInt"
+      }
+    },
+    {
+      "@id": "xsd:unsignedLong",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "unsignedLong"
+      }
+    },
+    {
+      "@id": "xsd:unsignedShort",
+      "@type": "rdfs:Datatype",
+      "rdfs:label": {
+        "@value": "unsignedShort"
+      }
+    }
+  ]
+}
