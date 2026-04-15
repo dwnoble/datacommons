@@ -27,7 +27,7 @@ from datacommons_db.models.node import NodeRecord
 from datacommons_db.models.edge import EdgeRecord
 from datacommons_schema.models.jsonld import JSONLDDocument, GraphNode
 
-from sqlalchemy import text, exc
+from sqlalchemy import text, exc, or_
 from sqlalchemy.orm import Session, joinedload
 
 from datacommons_api.core.config import get_config
@@ -78,6 +78,7 @@ VALUE_COLUMN_MAX_SIZE_BYTES = 10 * 1024 * 1024
 DEFAULT_PROVENANCE_ID = "system:default_provenance"
 LEGACY_LITERAL_TYPE = "literal"
 XSD_LITERAL_TYPES = {"xsd:string", "xsd:boolean", "xsd:integer", "xsd:double"}
+SYSTEM_NAMESPACE_NAME = "system"
 
 # --- 1. DATA ABSTRACTION & UTILITIES ---
 
@@ -187,6 +188,30 @@ def is_literal_node_types(types: list[str] | None) -> bool:
     if not types:
         return False
     return any(t in XSD_LITERAL_TYPES or t == LEGACY_LITERAL_TYPE for t in types)
+
+
+def is_external_proxy_node_types(types: list[str] | None) -> bool:
+    if not types:
+        return False
+    return "schema:ExternalProxy" in types
+
+
+def expand_namespaces_filter(namespaces: list[str] | None) -> list[str]:
+    """Expands and normalizes namespaces from repeated and/or comma-separated query values."""
+    if not namespaces:
+        return []
+
+    seen = set()
+    expanded = []
+    for raw in namespaces:
+        if raw is None:
+            continue
+        for token in raw.split(","):
+            ns = token.strip()
+            if ns and ns not in seen:
+                seen.add(ns)
+                expanded.append(ns)
+    return expanded
 
 
 def get_value_from_node_record(record: Any) -> Union[str, None]:
@@ -342,8 +367,7 @@ def extract_edges_from_graph_node(
             synthesized_nodes.append(
                 NodeRecord(
                     subject_id=fallback_prov,
-                    namespace_name=extract_namespace_name(fallback_prov)
-                    or LOCAL_NAMESPACE_NAME,
+                    namespace_name=SYSTEM_NAMESPACE_NAME,
                     types=["schema:ExternalProxy", "provenance_stub"],
                 )
             )
@@ -376,8 +400,7 @@ def extract_edges_from_graph_node(
             synthesized_nodes.append(
                 NodeRecord(
                     subject_id=predicate,
-                    namespace_name=extract_namespace_name(predicate)
-                    or LOCAL_NAMESPACE_NAME,
+                    namespace_name=SYSTEM_NAMESPACE_NAME,
                     types=["schema:ExternalProxy", "predicate_stub"],
                 )
             )
@@ -396,8 +419,7 @@ def extract_edges_from_graph_node(
                     synthesized_nodes.append(
                         NodeRecord(
                             subject_id=target_id,
-                            namespace_name=extract_namespace_name(target_id)
-                            or LOCAL_NAMESPACE_NAME,
+                            namespace_name=SYSTEM_NAMESPACE_NAME,
                             types=["schema:ExternalProxy"],
                             name=val.get(
                                 "name", ""
@@ -415,8 +437,7 @@ def extract_edges_from_graph_node(
                         synthesized_nodes.append(
                             NodeRecord(
                                 subject_id=edge_prov,
-                                namespace_name=extract_namespace_name(edge_prov)
-                                or LOCAL_NAMESPACE_NAME,
+                                namespace_name=SYSTEM_NAMESPACE_NAME,
                                 types=["schema:ExternalProxy", "provenance_stub"],
                             )
                         )
@@ -429,6 +450,43 @@ def extract_edges_from_graph_node(
                         subject_id=subject_id,
                         predicate=predicate,
                         object_id=target_id,
+                        provenance=edge_prov,
+                    )
+                )
+            elif isinstance(val, dict) and "@value" in val:
+                # --- Handle JSON-LD value objects (Node -> Literal) ---
+                literal_value = val.get("@value")
+                lit_id = generate_literal_id(literal_value)
+                synthesized_nodes.append(
+                    NodeRecord(
+                        subject_id=lit_id,
+                        namespace_name=LOCAL_NAMESPACE_NAME,
+                        types=[get_xsd_literal_type(literal_value)],
+                        **coerce_node_record_value(literal_value),
+                    )
+                )
+
+                raw_edge_prov = val.get("@provenance", None)
+                if raw_edge_prov:
+                    edge_prov, prov_is_remote = normalize_graph_id(
+                        raw_edge_prov, context
+                    )
+                    if prov_is_remote:
+                        synthesized_nodes.append(
+                            NodeRecord(
+                                subject_id=edge_prov,
+                                namespace_name=SYSTEM_NAMESPACE_NAME,
+                                types=["schema:ExternalProxy", "provenance_stub"],
+                            )
+                        )
+                else:
+                    edge_prov = fallback_prov
+
+                edges.append(
+                    create_edge_record(
+                        subject_id=subject_id,
+                        predicate=predicate,
+                        object_id=lit_id,
                         provenance=edge_prov,
                     )
                 )
@@ -475,7 +533,10 @@ def node_record_to_graph_node(record: NodeRecord) -> GraphNode:
         data["name"] = record.name
 
     val = get_value_from_node_record(record)
-    if val is not None:
+    # Suppress storage-level identity fallback values for non-literal nodes.
+    # These values are not semantically meaningful in JSON-LD responses.
+    is_literal_node = is_literal_node_types(getattr(record, "types", []))
+    if val is not None and (is_literal_node or val != record.subject_id):
         data["value"] = val
 
     properties = {}
@@ -862,23 +923,63 @@ class GraphService:
         )
 
     def get_graph_nodes(
-        self, limit: int = 10, type_filter: Optional[List[str]] = None
+        self,
+        limit: int = 10,
+        type_filter: Optional[List[str]] = None,
+        include_literals: bool = False,
+        include_proxies: bool = False,
+        namespaces: Optional[List[str]] = None,
     ) -> JSONLDDocument:
         """
         Fetches a subgraph and transforms it back to JSON-LD.
         """
         logger.info(
-            "Fetching graph nodes (limit=%d, type_filter=%s)", limit, type_filter
+            "Fetching graph nodes (limit=%d, type_filter=%s, include_literals=%s, include_proxies=%s, namespaces=%s)",
+            limit,
+            type_filter,
+            include_literals,
+            include_proxies,
+            namespaces,
         )
         query = self.session.query(NodeRecord).options(
             joinedload(NodeRecord.outgoing_edges).joinedload(EdgeRecord.target_node)
         )
+
+        normalized_namespaces = expand_namespaces_filter(namespaces)
+        if normalized_namespaces:
+            known_namespaces = NamespaceService(self.session).namespace_name_set()
+            unknown_namespaces = sorted(
+                set(normalized_namespaces).difference(known_namespaces)
+            )
+            if unknown_namespaces:
+                raise GraphServiceError(
+                    "unknown namespace value(s): %s"
+                    % ", ".join(unknown_namespaces)
+                )
+
+            id_prefix_filters = [
+                NodeRecord.subject_id.like(f"{namespace}:%")
+                for namespace in normalized_namespaces
+            ]
+            query = query.filter(or_(*id_prefix_filters))
 
         if type_filter:
             logger.info("Filtering nodes by types: %s", type_filter)
             query = query.filter(NodeRecord.types.overlap(type_filter))
 
         records = query.limit(limit).all()
+        if not include_literals:
+            records = [
+                record
+                for record in records
+                if not is_literal_node_types(getattr(record, "types", []))
+            ]
+        if not include_proxies:
+            records = [
+                record
+                for record in records
+                if not is_external_proxy_node_types(getattr(record, "types", []))
+            ]
         logger.debug("Retrieved %d nodes with outgoing edges", len(records))
         graph = [node_record_to_graph_node(r) for r in records]
         logger.info("Transformed %d nodes to JSON-LD format", len(graph))

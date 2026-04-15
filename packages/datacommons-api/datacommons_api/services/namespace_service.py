@@ -68,7 +68,7 @@ DEFAULT_NAMESPACES: list[dict] = [
         "description": "Data Commons IDs",
     },
     {
-        "name": "dc",
+        "name": "dcs",
         "url": "https://datacommons.org/browser/",
         "is_readonly": True,
         "is_datacommons": True,

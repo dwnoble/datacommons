@@ -14,13 +14,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from datacommons_api.core.constants import DEFAULT_NODE_FETCH_LIMIT
 from datacommons_api.core.logging import get_logger
 from datacommons_api.endpoints.dependencies import with_graph_service
 from datacommons_api.endpoints.responses import UpdateResponse
-from datacommons_api.services.graph_service import GraphService
+from datacommons_api.services.graph_service import GraphService, GraphServiceError
 from datacommons_schema.models.jsonld import JSONLDDocument
 
 logger = get_logger(__name__)
@@ -41,13 +41,44 @@ def get_nodes(
     type_filter: Annotated[
         list[str] | None, Query(alias="type", description="Zero or more types")
     ] = None,
+    include_literals: bool = Query(
+        default=False,
+        description="Include literal implementation nodes in top-level @graph.",
+    ),
+    include_proxies: bool = Query(
+        default=False,
+        description="Include external proxy implementation nodes in top-level @graph.",
+    ),
+    namespaces: Annotated[
+        list[str] | None,
+        Query(
+            description=(
+                "One or more namespaces to include for top-level nodes. "
+                "Accepts repeated params and/or comma-separated values."
+            )
+        ),
+    ] = None,
     graph_service: Annotated[GraphService, Depends(with_graph_service)] = None,
 ) -> JSONLDDocument:
     """
     Get nodes with their edges
     """
     # Get nodes with their edges
-    return graph_service.get_graph_nodes(limit=limit, type_filter=type_filter)
+    try:
+        return graph_service.get_graph_nodes(
+            limit=limit,
+            type_filter=type_filter,
+            include_literals=include_literals,
+            include_proxies=include_proxies,
+            namespaces=namespaces,
+        )
+    except GraphServiceError as e:
+        if "unknown namespace value(s)" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            ) from e
+        raise
 
 
 @router.post("/nodes", response_model=UpdateResponse, response_model_exclude_none=True)

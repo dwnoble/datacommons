@@ -22,6 +22,7 @@ from datacommons_api.core.config import Config
 from datacommons_api.services.graph_service import (
     GraphService,
     GraphServiceError,
+    SYSTEM_NAMESPACE_NAME,
     normalize_graph_id,
     get_node_record_batches,
     generate_literal_id,
@@ -30,6 +31,7 @@ from datacommons_api.services.graph_service import (
     create_node_record,
     create_edge_record,
     extract_edges_from_graph_node,
+    expand_namespaces_filter,
     get_xsd_literal_type,
     node_record_to_graph_node,
     insert_records_batch,
@@ -44,13 +46,13 @@ from datacommons_schema.models.jsonld import JSONLDDocument, GraphNode
 def test_normalize_graph_id():
     # 1. Known Shortforms (Remote)
     assert normalize_graph_id("schema:Person") == ("schema:Person", True)
-    assert normalize_graph_id("dc:Place") == ("dc:Place", True)
+    assert normalize_graph_id("dcs:Place") == ("dcs:Place", True)
 
     # 2. Full URIs -> Shortforms (Remote)
     assert normalize_graph_id("http://schema.org/Person") == ("schema:Person", True)
     assert normalize_graph_id("https://schema.org/Person") == ("schema:Person", True)
     assert normalize_graph_id("https://datacommons.org/browser/Place") == (
-        "dc:Place",
+        "dcs:Place",
         True,
     )
 
@@ -140,6 +142,16 @@ def test_get_xsd_literal_type():
     assert get_xsd_literal_type(12.3) == "xsd:double"
 
 
+def test_expand_namespaces_filter():
+    assert expand_namespaces_filter(None) == []
+    assert expand_namespaces_filter(["rdf"]) == ["rdf"]
+    assert expand_namespaces_filter(["rdf,rdfs", "xsd", "rdf"]) == [
+        "rdf",
+        "rdfs",
+        "xsd",
+    ]
+
+
 # 1.3 Model Mapping
 def test_create_node_record_standard():
     # Use @ aliases in constructor for GraphNode compatibility
@@ -175,6 +187,17 @@ def test_extract_edges_from_graph_node_mixed():
     # Wait, the fallback prov is generated before the loop in graph_service.py line 242!
     assert synthesized_nodes[0].types == ["system:DefaultNode"]
     assert synthesized_nodes[1].types == ["xsd:string"]
+
+
+def test_extract_edges_from_graph_node_value_object_literal_unwraps_value():
+    gn = GraphNode(**{"@id": "n1", "rdfs:label": {"@value": "ENTITIES"}})
+    edges, synthesized_nodes = extract_edges_from_graph_node(gn)
+
+    assert len(edges) == 1
+    literal_nodes = [n for n in synthesized_nodes if n.subject_id.startswith("l/")]
+    assert len(literal_nodes) == 1
+    assert literal_nodes[0].types == ["xsd:string"]
+    assert get_value_from_node_record(literal_nodes[0]) == "ENTITIES"
 
 
 @pytest.mark.parametrize(
@@ -232,6 +255,10 @@ def test_extract_edges_from_graph_node_absolute_iri_synthesizes_proxy():
         n.subject_id == target_iri and "schema:ExternalProxy" in (n.types or [])
         for n in synthesized_nodes
     )
+    assert any(
+        n.subject_id == target_iri and n.namespace_name == SYSTEM_NAMESPACE_NAME
+        for n in synthesized_nodes
+    )
 
 
 # 1.5 Extraction Logic
@@ -259,6 +286,14 @@ def test_node_record_to_graph_node_preserve():
 
     gn = node_record_to_graph_node(source)
     assert gn.model_dump(by_alias=True, exclude_none=True)["knows"] == {"@id": "t1"}
+
+
+def test_node_record_to_graph_node_hides_identity_value_for_non_literal():
+    source = NodeRecord(subject_id="rdf:Alt", types=["rdfs:Class"], value="rdf:Alt")
+    gn = node_record_to_graph_node(source)
+    payload = gn.model_dump(by_alias=True, exclude_none=True)
+    assert "@id" in payload
+    assert "value" not in payload
 
 
 # --- 2. INTEGRATION TESTS ---
@@ -454,6 +489,9 @@ def test_jsonld_round_trip(graph_service, mock_session, mock_spanner_batch):
     root.outgoing_edges = [e1, e2]
 
     mock_query = MagicMock()
+    (
+        mock_query.options.return_value.filter.return_value.limit.return_value.all.return_value
+    ) = [root]
     mock_query.options.return_value.limit.return_value.all.return_value = [root]
     mock_session.query.return_value = mock_query
 
@@ -464,6 +502,74 @@ def test_jsonld_round_trip(graph_service, mock_session, mock_spanner_batch):
     assert result_json["@id"] == "geoId/06"
     assert result_json["name"] == {"@value": "California"}
     assert result_json["containedInPlace"] == {"@id": "geoId/USA"}
+
+
+def test_get_graph_nodes_unknown_namespace_raises(graph_service):
+    with pytest.raises(GraphServiceError) as excinfo:
+        graph_service.get_graph_nodes(limit=1, namespaces=["doesnotexist"])
+    assert "unknown namespace value(s): doesnotexist" in str(excinfo.value)
+
+
+def test_get_graph_nodes_namespace_filter_uses_id_prefix_only(graph_service, mock_session):
+    mock_query = MagicMock()
+    mock_query.options.return_value.filter.return_value.limit.return_value.all.return_value = []
+    mock_session.query.return_value = mock_query
+
+    graph_service.get_graph_nodes(limit=10, namespaces=["local"])
+
+    filter_call = mock_query.options.return_value.filter.call_args
+    assert filter_call is not None
+    assert "subject_id" in str(filter_call.args[0])
+    assert "namespace_name" not in str(filter_call.args[0])
+
+
+def test_get_graph_nodes_excludes_literal_roots_by_default(graph_service, mock_session):
+    literal_root = NodeRecord(subject_id="l/abc", types=["xsd:string"], value="v")
+    entity_root = NodeRecord(subject_id="local:Entity", types=["schema:Thing"])
+
+    mock_query = MagicMock()
+    (
+        mock_query.options.return_value.limit.return_value.all.return_value
+    ) = [literal_root, entity_root]
+    mock_session.query.return_value = mock_query
+
+    doc = graph_service.get_graph_nodes(limit=10)
+    ids = [node.id for node in doc.graph]
+    assert ids == ["local:Entity"]
+
+
+def test_get_graph_nodes_excludes_proxy_roots_by_default(graph_service, mock_session):
+    proxy_root = NodeRecord(
+        subject_id="https://example.org/ext",
+        namespace_name=SYSTEM_NAMESPACE_NAME,
+        types=["schema:ExternalProxy"],
+    )
+    entity_root = NodeRecord(subject_id="local:Entity", types=["schema:Thing"])
+
+    mock_query = MagicMock()
+    (
+        mock_query.options.return_value.limit.return_value.all.return_value
+    ) = [proxy_root, entity_root]
+    mock_session.query.return_value = mock_query
+
+    doc = graph_service.get_graph_nodes(limit=10)
+    ids = [node.id for node in doc.graph]
+    assert ids == ["local:Entity"]
+
+
+def test_get_graph_nodes_include_proxies_true(graph_service, mock_session):
+    proxy_root = NodeRecord(
+        subject_id="https://example.org/ext",
+        namespace_name=SYSTEM_NAMESPACE_NAME,
+        types=["schema:ExternalProxy"],
+    )
+    mock_query = MagicMock()
+    mock_query.options.return_value.limit.return_value.all.return_value = [proxy_root]
+    mock_session.query.return_value = mock_query
+
+    doc = graph_service.get_graph_nodes(limit=10, include_proxies=True)
+    ids = [node.id for node in doc.graph]
+    assert ids == ["https://example.org/ext"]
 
 
 def test_insert_graph_nodes_proxy_synthesis(
