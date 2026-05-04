@@ -13,6 +13,7 @@ members = [
     "datacommons-api",
     "datacommons-cli",
     "datacommons-db",
+    "datacommons-infra",
     "datacommons-platform",
     "datacommons-schema",
 ]
@@ -346,6 +347,7 @@ dependencies = [
     { name = "click" },
     { name = "datacommons-api" },
     { name = "datacommons-db" },
+    { name = "datacommons-infra" },
     { name = "datacommons-schema" },
 ]
 
@@ -354,6 +356,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.7" },
     { name = "datacommons-api", editable = "packages/datacommons-api" },
     { name = "datacommons-db", editable = "packages/datacommons-db" },
+    { name = "datacommons-infra", editable = "packages/datacommons-infra" },
     { name = "datacommons-schema", editable = "packages/datacommons-schema" },
 ]
 
@@ -382,6 +385,16 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
+
+[[package]]
+name = "datacommons-infra"
+source = { editable = "packages/datacommons-infra" }
+dependencies = [
+    { name = "click" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "click", specifier = ">=8.1.7" }]
 
 [[package]]
 name = "datacommons-platform"

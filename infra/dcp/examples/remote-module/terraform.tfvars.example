@@ -1,0 +1,5 @@
+project_id = "your-gcp-project-id"
+namespace  = "your-team"
+
+# Optional (defaults to dcp-db)
+dcp_spanner_database_id = "dcp-db"

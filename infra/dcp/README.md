@@ -17,6 +17,30 @@ Before you begin, ensure you have the following:
 
 ## Initial Setup
 
+### Remote Module Quick Start (Minimal Consumer Config)
+
+If you want users to deploy from this module remotely (without cloning this repo), start from:
+
+*   [`examples/remote-module/main.tf`](/Users/dnoble/Projects/datacommons/datacommons/infra/dcp/examples/remote-module/main.tf)
+*   [`examples/remote-module/terraform.tfvars.example`](/Users/dnoble/Projects/datacommons/datacommons/infra/dcp/examples/remote-module/terraform.tfvars.example)
+
+This uses a Git module source in the form:
+
+```hcl
+source = "git::https://github.com/<org>/<repo>.git//infra/dcp?ref=<tag-or-commit>"
+```
+
+Use a release tag or commit SHA (instead of `main`) for reproducible environments.
+
+You can also scaffold this remote-module setup using the Data Commons CLI:
+
+```bash
+uv run datacommons infra init
+```
+
+For CLI usage details, see the top-level repository README section:
+`Deploying Data Commons Platform In GCP`.
+
 ### 1. Configure Local Variables
 
 Copy the example variables file to create your local configuration:
