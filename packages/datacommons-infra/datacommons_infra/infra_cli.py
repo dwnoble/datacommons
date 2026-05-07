@@ -15,6 +15,8 @@
 from pathlib import Path
 
 import click
+from google.api_core import exceptions
+from google.cloud import storage
 
 MAIN_TF_TEMPLATE = """terraform {{
   required_version = ">= 1.5.0"
@@ -127,6 +129,15 @@ Generated using the Data Commons CLI tool:
 https://github.com/datacommonsorg/datacommons
 """
 
+BACKEND_TF_TEMPLATE = """terraform {{
+  backend "gcs" {{
+    bucket = "{bucket_name}"
+    prefix = "terraform/state"
+  }}
+}}
+"""
+
+
 
 @click.group()
 def infra() -> None:
@@ -156,11 +167,27 @@ def init(
     if not resolved_project_id:
         raise click.ClickException("GCP project id must not be empty.")
 
-    resolved_namespace = namespace.strip() or click.prompt(
-        "Namespace", type=str, prompt_suffix=": "
-    ).strip()
-    if not resolved_namespace:
-        raise click.ClickException("Namespace must not be empty.")
+    resolved_namespace = namespace.strip()
+    while True:
+        if not resolved_namespace:
+            resolved_namespace = click.prompt(
+                "Namespace", type=str, prompt_suffix=": "
+            ).strip()
+            if not resolved_namespace:
+                click.secho("Error: Namespace must not be empty.", fg="red")
+                continue
+
+        target_dir = Path.cwd() / resolved_namespace
+        if target_dir.exists() and not force:
+            click.secho(
+                f"Error: Folder '{resolved_namespace}' already exists locally. "
+                "Please specify a different namespace, or use --force to overwrite.",
+                fg="yellow",
+            )
+            resolved_namespace = ""
+            continue
+
+        break
 
     resolved_dc_api_key = dc_api_key.strip() or click.prompt(
         "Data Commons API key (get one at apikeys.datacommons.org)",
@@ -170,19 +197,94 @@ def init(
         prompt_suffix=": ",
     ).strip()
 
-    target_dir = Path.cwd() / resolved_namespace
     main_tf_path = target_dir / "main.tf"
     tfvars_path = target_dir / "terraform.tfvars"
     readme_path = target_dir / "README.md"
-    existing_paths = [
-        path for path in (main_tf_path, tfvars_path, readme_path) if path.exists()
-    ]
+    backend_tf_path = target_dir / "backend.tf"
+
+    use_remote_state = click.confirm(
+        "Do you want to configure remote state storage in GCS?", default=False
+    )
+
+    paths_to_check = [main_tf_path, tfvars_path, readme_path]
+    if use_remote_state:
+        paths_to_check.append(backend_tf_path)
+
+    existing_paths = [path for path in paths_to_check if path.exists()]
     if existing_paths and not force:
         existing_labels = ", ".join(str(path) for path in existing_paths)
         raise click.ClickException(
             f"Refusing to overwrite existing file(s): {existing_labels}. "
             "Use --force to overwrite."
         )
+
+    resolved_bucket_name = ""
+    if use_remote_state:
+        default_bucket = f"tf-state-{resolved_namespace}-{resolved_project_id}"
+        try:
+            storage_client = storage.Client(project=resolved_project_id)
+        except Exception as e:
+            raise click.ClickException(
+                f"Failed to initialize GCS client for project '{resolved_project_id}': {e}. "
+                "Ensure you are authenticated via 'gcloud auth application-default login'."
+            )
+
+        while True:
+            bucket_name = click.prompt(
+                "Enter the name of your GCS Terraform State Bucket",
+                type=str,
+                default=default_bucket,
+            ).strip()
+            if not bucket_name:
+                click.secho("Error: Bucket name cannot be empty.", fg="red")
+                continue
+
+            click.secho(f"Checking bucket gs://{bucket_name}...", fg="bright_black")
+            try:
+                bucket = storage_client.get_bucket(bucket_name)
+                click.secho(f"Bucket gs://{bucket_name} already exists.", fg="yellow")
+                reuse = click.confirm(
+                    f"Do you want to re-use the existing bucket gs://{bucket_name}?",
+                    default=True,
+                )
+                if reuse:
+                    resolved_bucket_name = bucket_name
+                    break
+                else:
+                    click.secho("Please enter a different bucket name to continue.", fg="cyan")
+                    continue
+            except exceptions.NotFound:
+                click.secho(
+                    f"Creating bucket gs://{bucket_name} in project {resolved_project_id}...",
+                    fg="bright_black",
+                )
+                try:
+                    new_bucket = storage_client.create_bucket(bucket_name, location="US")
+                    new_bucket.iam_configuration.uniform_bucket_level_access_enabled = True
+                    new_bucket.versioning_enabled = True
+                    new_bucket.patch()
+                    click.secho(f"Enabling versioning on gs://{bucket_name}...", fg="bright_black")
+
+                    resolved_bucket_name = bucket_name
+                    break
+                except Exception as e:
+                    click.secho(
+                        f"Error: Failed to create or access bucket gs://{bucket_name}.",
+                        fg="red",
+                        bold=True,
+                    )
+                    click.secho(str(e), fg="red")
+                    click.secho("Please verify permissions/names availability and try again.", fg="yellow")
+                    continue
+            except Exception as e:
+                click.secho(
+                    f"Error: Failed to access bucket gs://{bucket_name}.",
+                    fg="red",
+                    bold=True,
+                )
+                click.secho(str(e), fg="red")
+                click.secho("Please verify permissions/names availability and try again.", fg="yellow")
+                continue
 
     target_dir.mkdir(parents=True, exist_ok=True)
     main_tf_path.write_text(MAIN_TF_TEMPLATE.format(ref=ref), encoding="utf-8")
@@ -195,11 +297,17 @@ def init(
         encoding="utf-8",
     )
     readme_path.write_text(README_TEMPLATE, encoding="utf-8")
+    if use_remote_state and resolved_bucket_name:
+        backend_tf_path.write_text(
+            BACKEND_TF_TEMPLATE.format(bucket_name=resolved_bucket_name), encoding="utf-8"
+        )
 
     click.secho(f"Initialized Terraform scaffold in {target_dir}", fg="green")
     click.secho(f"- Wrote {main_tf_path}", fg="bright_black")
     click.secho(f"- Wrote {tfvars_path}", fg="bright_black")
     click.secho(f"- Wrote {readme_path}", fg="bright_black")
+    if use_remote_state and resolved_bucket_name:
+        click.secho(f"- Wrote {backend_tf_path}", fg="bright_black")
     click.secho(
         f"Generated new folder '{resolved_namespace}'. See {resolved_namespace}/README.md for next steps.",
         fg="cyan",
